@@ -34,9 +34,19 @@
 #ifndef __ASSEMBLER__
 #include <stdio.h>  // for NULL
 #include <string.h> // for memcpy
-// #include "kinetis.h"
-#endif
+#if defined(__SAMD51__)
+#include "sam.h"
 
+#define NVIC_ENABLE_IRQ NVIC_EnableIRQ
+#define NVIC_DISABLE_IRQ NVIC_DisableIRQ
+#define IRQ_SOFTWARE SOFTWARE_IRQn
+#define NVIC_SET_PRIORITY NVIC_SetPriority
+
+//we're gonna commandeer this kinda useless IQRn and use it as a software interrupt 
+#define SOFTWARE_IRQn EVSYS_4_IRQn
+#define SOFTWARE_Handler EVSYS_4_Handler
+
+//TODO: lets try to find an unused timer instead of hardcoding
 #if defined(ADAFRUIT_PYBADGE_M4_EXPRESS) || defined(ADAFRUIT_PYGAMER_M4_EXPRESS) || defined(ADAFRUIT_PYGAMER_ADVANCE_M4_EXPRESS)
 // TC2 is backlight, TC3 is Tone()
   #define AUDIO_TC TC5
@@ -54,46 +64,55 @@
 
 #define WAIT_TC8_REGS_SYNC(x) while(x->COUNT8.SYNCBUSY.bit.ENABLE || x->COUNT8.SYNCBUSY.bit.SWRST);
 
-//音频块采样
-#define AUDIO_BLOCK_SAMPLES  128
+//TODO: remove
+#define DMAMEM
 
-//音频采样率精确
+#else
+#include "kinetis.h"
+#endif
+#endif
+
+// AUDIO_BLOCK_SAMPLES determines how many samples the audio library processes
+// per update.  It may be reduced to achieve lower latency response to events,
+// at the expense of higher interrupt and DMA setup overhead.
+//
+// Less than 32 may not work with some input & output objects.  Multiples of 16
+// should be used, since some synthesis objects generate 16 samples per loop.
+//
+// Some parts of the audio library may have hard-coded dependency on 128 samples.
+// Please report these on the forum with reproducible test cases.
+
+#ifndef AUDIO_BLOCK_SAMPLES
+#if defined(__MK20DX128__) || defined(__MK20DX256__) || defined(__MK64FX512__) || defined(__MK66FX1M0__)
+#define AUDIO_BLOCK_SAMPLES  128
+#elif defined(__MKL26Z64__)
+#define AUDIO_BLOCK_SAMPLES  64
+#elif defined(__SAMD51__)
+#define AUDIO_BLOCK_SAMPLES  128
+#endif
+#endif
+
+#ifndef AUDIO_SAMPLE_RATE_EXACT
+#if defined(__MK20DX128__) || defined(__MK20DX256__) || defined(__MK64FX512__) || defined(__MK66FX1M0__)
+#define AUDIO_SAMPLE_RATE_EXACT 44117.64706 // 48 MHz / 1088, or 96 MHz * 2 / 17 / 256
+#elif defined(__MKL26Z64__)
+#define AUDIO_SAMPLE_RATE_EXACT 22058.82353 // 48 MHz / 2176, or 96 MHz * 1 / 17 / 256
+#elif defined(__SAMD51__)
+
+//#define AUDIO_CLKRATE (SystemCoreClock >> 6)
+//#define AUDIO_PRESCALER TC_CTRLA_PRESCALER_DIV64
+//#define AUDIO_SAMPLE_RATE_EXACT 22058.82353 // 120 MHz / 64 / 85 
+//#define AUDIO_TC_FREQ 22000
+
 #define AUDIO_CLKRATE (VARIANT_GCLK2_FREQ >> 4)
 #define AUDIO_PRESCALER TC_CTRLA_PRESCALER_DIV16
 #define AUDIO_SAMPLE_RATE_EXACT 44014.085 // 100 MHz / 16 / 142
 #define AUDIO_TC_FREQ 44100
 
-//音频采样率
+#endif // SAMD51
+#endif // AUDIO_SAMPLE_RATE_EXACT
 
 #define AUDIO_SAMPLE_RATE AUDIO_SAMPLE_RATE_EXACT
-
-#define DMAMEM __attribute__ ((section(".dmabuffers"), used))
-#define FASTRUN __attribute__ ((section(".fastrun"), noinline, noclone ))
-
-#define __disable_irq() __asm__ volatile("CPSID i":::"memory");
-#define __enable_irq()	__asm__ volatile("CPSIE i":::"memory");
-
-//NVIC挂起设置
-#define NVIC_SET_PENDING(n) NVIC_SetPendingIRQ(n)
-
-#define NVIC_SET_PRIORITY(n,num) NVIC_SetPriority(n,num)
-
-#define NVIC_ENABLE_IRQ(n)	NVIC_EnableIRQ(n)
-
-#define NVIC_DISABLE_IRQ(n) NVIC_DisableIRQ(n)
-
-#define ARM_DEMCR		(CoreDebug->DEMCR)
-
-#define ARM_DEMCR_TRCENA		(1 << 24)
-
-#define ARM_DWT_CTRL		(DWT->CTRL)
-
-#define ARM_DWT_CTRL_CYCCNTENA		(1 << 0)
-
-#define ARM_DWT_CYCCNT		(DWT->CYCCNT) 
-//
-#define	IRQ_SOFTWARE	EVSYS_4_IRQn
-
 
 #ifndef __ASSEMBLER__
 class AudioStream;
@@ -106,24 +125,23 @@ typedef struct audio_block_struct {
 	int16_t  data[AUDIO_BLOCK_SAMPLES];
 } audio_block_t;
 
+
 class AudioConnection
 {
 public:
 	AudioConnection(AudioStream &source, AudioStream &destination) :
 		src(source), dst(destination), src_index(0), dest_index(0),
 		next_dest(NULL)
-		{ 
-		  connect(); }
+		{ connect(); }
 	AudioConnection(AudioStream &source, unsigned char sourceOutput,
 		AudioStream &destination, unsigned char destinationInput) :
 		src(source), dst(destination),
 		src_index(sourceOutput), dest_index(destinationInput),
 		next_dest(NULL)
-		{ 
-		  connect(); }
+		{ connect(); }
 	friend class AudioStream;
-	void connect(void);
 protected:
+	void connect(void);
 	AudioStream &src;
 	AudioStream &dst;
 	unsigned char src_index;
@@ -146,7 +164,6 @@ protected:
 #define AudioMemoryUsageMax() (AudioStream::memory_used_max)
 #define AudioMemoryUsageMaxReset() (AudioStream::memory_used_max = AudioStream::memory_used)
 
-
 class AudioStream
 {
 public:
@@ -154,7 +171,7 @@ public:
 		num_inputs(ninput), inputQueue(iqueue) {
 			active = false;
 			destination_list = NULL;
-			for (int i=0; i < num_inputs; i++ ) {
+			for (int i=0; i < num_inputs; i++) {
 				inputQueue[i] = NULL;
 			}
 			// add to a simple list, for update_all
@@ -169,13 +186,11 @@ public:
 			next_update = NULL;
 			cpu_cycles = 0;
 			cpu_cycles_max = 0;
-			
 		}
 	static void initialize_memory(audio_block_t *data, unsigned int num);
 	int processorUsage(void) { return CYCLE_COUNTER_APPROX_PERCENT(cpu_cycles); }
 	int processorUsageMax(void) { return CYCLE_COUNTER_APPROX_PERCENT(cpu_cycles_max); }
 	void processorUsageMaxReset(void) { cpu_cycles_max = cpu_cycles; }
-	bool isActive(void) { return active; }
 	uint16_t cpu_cycles;
 	uint16_t cpu_cycles_max;
 	static uint16_t cpu_cycles_total;
@@ -192,7 +207,11 @@ protected:
 	audio_block_t * receiveWritable(unsigned int index = 0);
 	static bool update_setup(void);
 	static void update_stop(void);
+#if defined(__SAMD51__)
+	static void update_all(void) { NVIC_SetPendingIRQ(SOFTWARE_IRQn); }
+#else
 	static void update_all(void) { NVIC_SET_PENDING(IRQ_SOFTWARE); }
+#endif
 	friend void software_isr(void);
 	friend class AudioConnection;
 private:

@@ -1,4 +1,4 @@
-/* Teensyduino Core Library
+﻿/* Teensyduino Core Library
  * http://www.pjrc.com/teensy/
  * Copyright (c) 2017 PJRC.COM, LLC.
  *
@@ -29,8 +29,9 @@
  */
 
 
-#include <Arduino.h>
+#include <string.h> // for memcpy
 #include "AudioStream.h"
+#include <Arduino.h>
 
 #if defined(__MKL26Z64__)
   #define MAX_AUDIO_MEMORY 6144
@@ -57,6 +58,9 @@ uint16_t AudioStream::cpu_cycles_total_max = 0;
 uint16_t AudioStream::memory_used = 0;
 uint16_t AudioStream::memory_used_max = 0;
 
+
+
+
 // Set up the pool of audio data blocks
 // placing them all onto the free list
 void AudioStream::initialize_memory(audio_block_t *data, unsigned int num)
@@ -82,7 +86,7 @@ void AudioStream::initialize_memory(audio_block_t *data, unsigned int num)
 	__enable_irq();
 
 }
-                    
+
 // Allocate 1 audio data block.  If successful
 // the caller is the only owner of this new block
 audio_block_t * AudioStream::allocate(void)
@@ -208,14 +212,11 @@ void AudioConnection::connect(void)
 	if (p == NULL) {
 		src.destination_list = this;
 	} else {
-		while (p->next_dest) {
-			p = p->next_dest;
-		}
+		while (p->next_dest) p = p->next_dest;
 		p->next_dest = this;
 	}
 	src.active = true;
 	dst.active = true;
-
 	__enable_irq();
 }
 
@@ -248,25 +249,46 @@ AudioStream * AudioStream::first_update = NULL;
 void software_isr(void) // AudioStream::update_all()
 {
 	AudioStream *p;
+
+#if defined(ARDUINO_ARCH_SAMD)
+//TODO: this
 	uint32_t totalcycles = 0;
+#else
+	ARM_DEMCR |= ARM_DEMCR_TRCENA;
+	ARM_DWT_CTRL |= ARM_DWT_CTRL_CYCCNTENA;
+	uint32_t totalcycles = ARM_DWT_CYCCNT;
+#endif
 	//digitalWriteFast(2, HIGH);
 	for (p = AudioStream::first_update; p; p = p->next_update) {
 		if (p->active) {
+#if defined(ARDUINO_ARCH_SAMD)
+//TODO: this
 			uint32_t cycles = 0;
+#else
+			uint32_t cycles = ARM_DWT_CYCCNT;
+#endif
 			p->update();
 			// TODO: traverse inputQueueArray and release
 			// any input blocks that weren't consumed?
+#if defined(ARDUINO_ARCH_SAMD)
+//TODO: this
+#else
+			cycles = (ARM_DWT_CYCCNT - cycles) >> 4;
+#endif
 			p->cpu_cycles = cycles;
 			if (cycles > p->cpu_cycles_max) p->cpu_cycles_max = cycles;
 		}
 	}
 	//digitalWriteFast(2, LOW);
-	// totalcycles = (ARM_DWT_CYCCNT - totalcycles) >> 4;;
+#if defined(ARDUINO_ARCH_SAMD)
+//TODO: this
+#else
+	totalcycles = (ARM_DWT_CYCCNT - totalcycles) >> 4;;
+#endif
 	AudioStream::cpu_cycles_total = totalcycles;
 	if (totalcycles > AudioStream::cpu_cycles_total_max)
 		AudioStream::cpu_cycles_total_max = totalcycles;
 }
-
 
 #if defined(__SAMD51__)
 
