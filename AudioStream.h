@@ -35,21 +35,22 @@
 #include <stdio.h>  // for NULL
 #include <string.h> // for memcpy
 // #include "kinetis.h"
+#include "sam.h"
 #endif
 
 // #if defined(ADAFRUIT_PYBADGE_M4_EXPRESS) || defined(ADAFRUIT_PYGAMER_M4_EXPRESS) || defined(ADAFRUIT_PYGAMER_ADVANCE_M4_EXPRESS)
 // TC2 is backlight, TC3 is Tone()
-//   #define AUDIO_TC TC5
-//   #define AUDIO_IRQn TC5_IRQn
-//   #define AUDIO_Handler TC5_Handler
-//   #define AUDIO_GCLK_ID TC5_GCLK_ID
-//   #define AUDIO_TC_DMAC_ID_OVF TC5_DMAC_ID_OVF
+  #define AUDIO_TC TC5
+  #define AUDIO_IRQn TC5_IRQn
+  #define AUDIO_Handler TC5_Handler
+  #define AUDIO_GCLK_ID TC5_GCLK_ID
+  #define AUDIO_TC_DMAC_ID_OVF TC5_DMAC_ID_OVF
 // #else
-  #define AUDIO_TC TC4
-  #define AUDIO_IRQn TC4_IRQn
-  #define AUDIO_Handler TC4_Handler
-  #define AUDIO_GCLK_ID TC4_GCLK_ID
-  #define AUDIO_TC_DMAC_ID_OVF TC4_DMAC_ID_OVF
+//   #define AUDIO_TC TC2
+//   #define AUDIO_IRQn TC2_IRQn
+//   #define AUDIO_Handler TC2_Handler
+//   #define AUDIO_GCLK_ID TC2_GCLK_ID
+//   #define AUDIO_TC_DMAC_ID_OVF TC2_DMAC_ID_OVF
 // #endif
 
 #define WAIT_TC8_REGS_SYNC(x) while(x->COUNT8.SYNCBUSY.bit.ENABLE || x->COUNT8.SYNCBUSY.bit.SWRST);
@@ -70,8 +71,8 @@
 #define DMAMEM __attribute__ ((section(".dmabuffers"), used))
 #define FASTRUN __attribute__ ((section(".fastrun"), noinline, noclone ))
 
-#define __disable_irq() __asm__ volatile("CPSID i":::"memory");
-#define __enable_irq()	__asm__ volatile("CPSIE i":::"memory");
+// #define __disable_irq() __asm__ volatile("CPSID i":::"memory");
+// #define __enable_irq()	__asm__ volatile("CPSIE i":::"memory");
 
 //NVIC挂起设置
 #define NVIC_SET_PENDING(n) NVIC_SetPendingIRQ(n)
@@ -93,7 +94,7 @@
 #define ARM_DWT_CYCCNT		(DWT->CYCCNT) 
 //
 #define	IRQ_SOFTWARE	EVSYS_4_IRQn
-
+#define SOFTWARE_Handler	EVSYS_4_Handler	
 
 #ifndef __ASSEMBLER__
 class AudioStream;
@@ -112,16 +113,20 @@ public:
 	AudioConnection(AudioStream &source, AudioStream &destination) :
 		src(source), dst(destination), src_index(0), dest_index(0),
 		next_dest(NULL)
-		{ 
+		{ isConnected = false;
 		  connect(); }
 	AudioConnection(AudioStream &source, unsigned char sourceOutput,
 		AudioStream &destination, unsigned char destinationInput) :
 		src(source), dst(destination),
 		src_index(sourceOutput), dest_index(destinationInput),
 		next_dest(NULL)
-		{ 
+		{ isConnected = false;
 		  connect(); }
 	friend class AudioStream;
+	~AudioConnection() {
+		disconnect();
+	}
+	void disconnect(void);
 	void connect(void);
 protected:
 	AudioStream &src;
@@ -129,6 +134,7 @@ protected:
 	unsigned char src_index;
 	unsigned char dest_index;
 	AudioConnection *next_dest;
+	bool isConnected;
 };
 
 
@@ -169,7 +175,7 @@ public:
 			next_update = NULL;
 			cpu_cycles = 0;
 			cpu_cycles_max = 0;
-			
+			numConnections = 0;
 		}
 	static void initialize_memory(audio_block_t *data, unsigned int num);
 	int processorUsage(void) { return CYCLE_COUNTER_APPROX_PERCENT(cpu_cycles); }
@@ -195,6 +201,7 @@ protected:
 	static void update_all(void) { NVIC_SET_PENDING(IRQ_SOFTWARE); }
 	friend void software_isr(void);
 	friend class AudioConnection;
+	uint8_t numConnections;
 private:
 	AudioConnection *destination_list;
 	audio_block_t **inputQueue;

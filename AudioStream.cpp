@@ -27,8 +27,6 @@
  * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
  * SOFTWARE.
  */
-
-
 #include <Arduino.h>
 #include "AudioStream.h"
 
@@ -57,13 +55,14 @@ uint16_t AudioStream::cpu_cycles_total_max = 0;
 uint16_t AudioStream::memory_used = 0;
 uint16_t AudioStream::memory_used_max = 0;
 
+
 // Set up the pool of audio data blocks
 // placing them all onto the free list
 void AudioStream::initialize_memory(audio_block_t *data, unsigned int num)
 {
 	unsigned int i;
 	unsigned int maxnum = MAX_AUDIO_MEMORY / AUDIO_BLOCK_SAMPLES / 2;
-
+	
 	//Serial.println("AudioStream initialize_memory");
 	//delay(10);
 	if (num > maxnum) num = maxnum;
@@ -202,23 +201,95 @@ void AudioConnection::connect(void)
 {
 	AudioConnection *p;
 
+	if (isConnected) return;
+	//判断目标通道是否大于目标通道数量
 	if (dest_index > dst.num_inputs) return;
 	__disable_irq();
+
 	p = src.destination_list;
 	if (p == NULL) {
 		src.destination_list = this;
 	} else {
 		while (p->next_dest) {
+			if (&p->src == &this->src && &p->dst == &this->dst
+				&& p->src_index == this->src_index && p->dest_index == this->dest_index) {
+				//Source and destination already connected through another connection, abort
+				__enable_irq();
+				return;
+			}
 			p = p->next_dest;
 		}
 		p->next_dest = this;
 	}
+	this->next_dest = NULL;
+	src.numConnections++;
 	src.active = true;
+
+	dst.numConnections++;
 	dst.active = true;
+
+	isConnected = true;
 
 	__enable_irq();
 }
 
+void AudioConnection::disconnect(void)
+{
+	AudioConnection *p;
+
+	if (!isConnected) return;
+	if (dest_index > dst.num_inputs) return;
+	__disable_irq();
+	// Remove destination from source list
+	p = src.destination_list;
+	if (p == NULL) {
+//>>> PAH re-enable the IRQ
+		__enable_irq();
+		return;
+	} else if (p == this) {
+		if (p->next_dest) {
+			src.destination_list = next_dest;
+		} else {
+			src.destination_list = NULL;
+		}
+	} else {
+		while (p) {
+			if (p == this) {
+				if (p->next_dest) {
+					p = next_dest;
+					break;
+				} else {
+					p = NULL;
+					break;
+				}
+			}
+			p = p->next_dest;
+		}
+	}
+//>>> PAH release the audio buffer properly
+	//Remove possible pending src block from destination
+	if(dst.inputQueue[dest_index] != NULL) {
+		AudioStream::release(dst.inputQueue[dest_index]);
+		// release() re-enables the IRQ. Need it to be disabled a little longer
+		__disable_irq();
+		dst.inputQueue[dest_index] = NULL;
+	}
+
+	//Check if the disconnected AudioStream objects should still be active
+	src.numConnections--;
+	if (src.numConnections == 0) {
+		src.active = false;
+	}
+
+	dst.numConnections--;
+	if (dst.numConnections == 0) {
+		dst.active = false;
+	}
+
+	isConnected = false;
+
+	__enable_irq();
+}
 
 
 // When an object has taken responsibility for calling update_all()
@@ -248,27 +319,28 @@ AudioStream * AudioStream::first_update = NULL;
 void software_isr(void) // AudioStream::update_all()
 {
 	AudioStream *p;
-	uint32_t totalcycles = 0;
+
+	ARM_DEMCR |= ARM_DEMCR_TRCENA;
+	ARM_DWT_CTRL |= ARM_DWT_CTRL_CYCCNTENA;
+	uint32_t totalcycles = ARM_DWT_CYCCNT;
 	//digitalWriteFast(2, HIGH);
 	for (p = AudioStream::first_update; p; p = p->next_update) {
 		if (p->active) {
-			uint32_t cycles = 0;
+			uint32_t cycles = ARM_DWT_CYCCNT;
 			p->update();
 			// TODO: traverse inputQueueArray and release
 			// any input blocks that weren't consumed?
+			cycles = (ARM_DWT_CYCCNT - cycles) >> 4;
 			p->cpu_cycles = cycles;
 			if (cycles > p->cpu_cycles_max) p->cpu_cycles_max = cycles;
 		}
 	}
 	//digitalWriteFast(2, LOW);
-	// totalcycles = (ARM_DWT_CYCCNT - totalcycles) >> 4;;
+	totalcycles = (ARM_DWT_CYCCNT - totalcycles) >> 4;;
 	AudioStream::cpu_cycles_total = totalcycles;
 	if (totalcycles > AudioStream::cpu_cycles_total_max)
 		AudioStream::cpu_cycles_total_max = totalcycles;
 }
-
-
-#if defined(__SAMD51__)
 
 extern "C" {
 
@@ -278,5 +350,3 @@ void SOFTWARE_Handler(void)
 }
 
 };
-
-#endif

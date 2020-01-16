@@ -24,12 +24,10 @@
  * THE SOFTWARE.
  */
 
-#include <Arduino.h>
 #include "output_dac.h"
+#include "utility/pdb.h"
 #include "utility/dma.h"
-
-// #include "WVariant.h"
-// #include "utility/pdb.h"
+#include "wiring_private.h"
 
 
 DMAMEM static uint16_t dac_buffer[AUDIO_BLOCK_SAMPLES*2];
@@ -47,22 +45,35 @@ static uint32_t *saddr;
 void AudioOutputAnalog::begin(void)
 {
 	dma0 = new Adafruit_ZeroDMA();
-	//分配信道
-	 dma0->allocate();
-	// Serial.println(stat);
-	pinPeripheral(PIN_DAC1, PIO_ANALOG);
 
+	stat = dma0->allocate();
+	
+	// pinPeripheral(PIN_DAC0, PIO_ANALOG);
+	pinPeripheral(PIN_DAC1, PIO_ANALOG);
+	
 	while (DAC->SYNCBUSY.bit.ENABLE || DAC->SYNCBUSY.bit.SWRST);
-		DAC->CTRLA.bit.ENABLE = 0;     // disable DAC
-			
+	DAC->CTRLA.bit.ENABLE = 0;     // disable DAC
+	
 	while (DAC->SYNCBUSY.bit.ENABLE || DAC->SYNCBUSY.bit.SWRST);
-		DAC->DACCTRL[1].bit.ENABLE = 0;
-			
+	// DAC->DACCTRL[0].bit.ENABLE = 1;
+	DAC->DACCTRL[1].bit.ENABLE = 1;
+	
 	while (DAC->SYNCBUSY.bit.ENABLE || DAC->SYNCBUSY.bit.SWRST);
-		DAC->CTRLA.bit.ENABLE = 1;     // enable DAC
+	DAC->CTRLA.bit.ENABLE = 1;     // enable DAC
 
 	
-	// // //TODO: on SAMD51 lets find an unused timer and use that
+	// slowly ramp up to DC voltage, approx 1/4 second
+	//升高DAC电压
+	for (int16_t i=0; i<=2048; i+=8) {
+		while (/* !DAC->STATUS.bit.READY0 ||*/  !DAC->STATUS.bit.READY1);
+		while (/* DAC->SYNCBUSY.bit.DATA0 ||*/  DAC->SYNCBUSY.bit.DATA1 );
+		// DAC->DATA[0].reg = i;
+		DAC->DATA[1].reg = i;
+		delay(1);
+	}
+
+	//TODO: on SAMD51 lets find an unused timer and use that
+	//设置一个定时器来进行中断定时，并且定时触发DMA请求
 
 	GCLK->PCHCTRL[AUDIO_GCLK_ID].reg = GCLK_PCHCTRL_GEN_GCLK2_Val | (1 << GCLK_PCHCTRL_CHEN_Pos);
 	AUDIO_TC->COUNT8.WAVE.reg = TC_WAVE_WAVEGEN_NFRQ;
@@ -80,34 +91,35 @@ void AudioOutputAnalog::begin(void)
 	AUDIO_TC->COUNT8.PER.reg = (uint8_t)( AUDIO_CLKRATE / AUDIO_TC_FREQ);
 	WAIT_TC8_REGS_SYNC(AUDIO_TC)
 	
-	// AUDIO_TC->COUNT8.CTRLA.reg |= TC_CTRLA_ENABLE;
-	// WAIT_TC8_REGS_SYNC(AUDIO_TC)
-
-	// TC4->COUNT8.CTRLA.reg |=TC_CTRLA_ENABLE;
-	// while(TC4->COUNT8.SYNCBUSY.bit.ENABLE || TC4->COUNT8.SYNCBUSY.bit.SWRST);
-
-	// set trigger
+	AUDIO_TC->COUNT8.CTRLA.reg |= TC_CTRLA_ENABLE;
+	WAIT_TC8_REGS_SYNC(AUDIO_TC)
+	/*
+		TC5->COUNT8.CTRLA.reg |= TC_CTRLA_ENABLE;
+		while(TC5->COUNT8.SYNCBUSY.bit.ENABLE || TC5->COUNT8.SYNCBUSY.bit.SWRST);
+	*/
+	
 	dma0->setTrigger(AUDIO_TC_DMAC_ID_OVF);
 	dma0->setAction(DMA_TRIGGER_ACTON_BEAT);
-
-	//add descriptor
+	
 	desc = dma0->addDescriptor(
-	  dac_buffer,						// move data from here
-	  (void *)(&DAC->DATA[1]),			// to here
-	  AUDIO_BLOCK_SAMPLES,               // this many...
+	  dac_buffer,			   		// move data from here
+	  (void *)(&DAC->DATA[1]), 			// to here
+	  AUDIO_BLOCK_SAMPLES,                // this many...
 	  DMA_BEAT_SIZE_WORD,               // bytes/hword/words
 	  true,                             // increment source addr?
 	  false);
 	
-	desc->BTCTRL.bit.BLOCKACT = DMA_BLOCK_ACTION_INT;  
+	desc->BTCTRL.bit.BLOCKACT = DMA_BLOCK_ACTION_INT;
+
+
 	dma0->loop(true);
-	
+
 	update_responsibility = update_setup();
 	dma0->setCallback(AudioOutputAnalog::isr);
-
 	dma0->startJob();
 
 }
+
 void AudioOutputAnalog::analogReference(int ref)
 {
 	// TODO: this should ramp gradually to the new DC level
@@ -151,6 +163,7 @@ void AudioOutputAnalog::isr(Adafruit_ZeroDMA *dma)
 	audio_block_t *block;
 	uint32_t saddr;
 
+	__disable_irq();
 	saddr = (uint32_t)dac_buffer;
 	// dma.clearInterrupt();
 	if (saddr < (uint32_t)dac_buffer + sizeof(dac_buffer) / 2) {
@@ -179,5 +192,6 @@ void AudioOutputAnalog::isr(Adafruit_ZeroDMA *dma)
 			*dest++ = 2048;
 		} while (dest < end);
 	}
+	__enable_irq();
 	if (AudioOutputAnalog::update_responsibility) AudioStream::update_all();
 }

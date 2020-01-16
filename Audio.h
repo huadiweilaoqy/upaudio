@@ -59,6 +59,6 @@
 #include "output_dac.h"
 #include "play_memory.h"
 #include "synth_waveform.h"
-
-
+#include "output_dacs.h"
+#include "output_i2s.h"
 #endif
