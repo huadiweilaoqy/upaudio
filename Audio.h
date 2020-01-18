@@ -61,4 +61,5 @@
 #include "synth_waveform.h"
 #include "output_dacs.h"
 #include "output_i2s.h"
+#include "play_sd_wav.h"
 #endif
