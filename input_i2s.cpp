@@ -40,8 +40,6 @@ Adafruit_ZeroDMA *AudioInputI2S::dma;
 DmacDescriptor *AudioInputI2S::desc;
 static ZeroDMAstatus    stat;
 
-
-
 void AudioInputI2S::begin(void)
 {
 
@@ -172,12 +170,12 @@ void AudioInputI2S::config_i2s(void)
 {
 
 //check that i2s has not already been configured
-	//if(!I2S->CTRLA.bit.ENABLE)
-	i2s->begin(I2S_16_BIT, 44100);
-	i2s->enableMCLK();
-	// i2s->enableTx();
-	i2s->enableRx();
-
+	if(!I2S->CTRLA.bit.ENABLE){
+		i2s->begin(I2S_16_BIT, 44100);
+		i2s->enableMCLK();
+		i2s->enableTx();
+		i2s->enableRx();
+	}
 }
 
 /******************************************************************/

@@ -63,6 +63,7 @@
 #include "synth_waveform.h"
 
 #include "input_i2s.h"
+#include "input_adcs.h"
 
 #include "output_dac.h"
 #include "output_dacs.h"
