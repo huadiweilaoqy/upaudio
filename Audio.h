@@ -55,11 +55,23 @@
 
 #define AudioNoInterrupts() (NVIC_DISABLE_IRQ(IRQ_SOFTWARE))
 #define AudioInterrupts()   (NVIC_ENABLE_IRQ(IRQ_SOFTWARE))
+#include "elapsedMillis.h"
+#include "record_queue.h"
+#include <SD.h>
+#include "analyze_peak.h"
+
+#include "synth_waveform.h"
+
+#include "input_i2s.h"
 
 #include "output_dac.h"
-#include "play_memory.h"
-#include "synth_waveform.h"
 #include "output_dacs.h"
 #include "output_i2s.h"
+
 #include "play_sd_wav.h"
+#include "play_sd_raw.h"
+#include "play_memory.h"
+
+#include "mixer.h"
+#include "spi_interrupt.h"
 #endif
