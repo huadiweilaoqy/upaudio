@@ -24,76 +24,38 @@
  * THE SOFTWARE.
  */
 
-#include <Arduino.h>
-#include "record_queue.h"
-#include "utility/dspinst.h"
+#ifndef input_adc_h_
+#define input_adc_h_
 
-//返回数据长度
-int AudioRecordQueue::available(void)
+#include "Arduino.h"
+#include "AudioStream.h"
+#include "Adafruit_ZeroDMA.h"
+
+class AudioInputAnalog : public AudioStream
 {
-	uint32_t h, t;
+public:
+        AudioInputAnalog() : AudioStream(0, NULL)
+        {
+                init(A2);
+        }
+        AudioInputAnalog(uint8_t pin) : AudioStream(0, NULL)
+        {
+                init(pin);
+        }
+        virtual void update(void);
+        friend void dma_ch9_isr(void);
 
-	h = head;
-	t = tail;
-	if (h >= t) return h - t;
-	return 53 + h - t;
-}
-//清空数据
-void AudioRecordQueue::clear(void)
-{
-	uint32_t t;
+private:
+        static audio_block_t *block_left;
+        static uint16_t block_offset;
+        static int32_t hpf_y1;
+        static int32_t hpf_x1;
 
-	if (userblock) {
-		release(userblock);
-		userblock = NULL;
-	}
-	t = tail;
-	while (t != head) {
-		if (++t >= 53) t = 0;
-		release(queue[t]);
-	}
-	tail = t;
-}
+        static bool update_responsibility;
+	static Adafruit_ZeroDMA *dma;
+	static DmacDescriptor *desc;
+        static void isr(Adafruit_ZeroDMA *dma);
+        static void init(uint8_t pin);
+};
 
-int16_t * AudioRecordQueue::readBuffer(void)
-{
-	uint32_t t;
-
-	if (userblock) return NULL;
-	t = tail;
-	if (t == head) return NULL;
-	if (++t >= 53) t = 0;
-	userblock = queue[t];
-	tail = t;
-	return userblock->data;
-}
-
-void AudioRecordQueue::freeBuffer(void)
-{
-	if (userblock == NULL) return;
-	release(userblock);
-	userblock = NULL;
-}
-
-void AudioRecordQueue::update(void)
-{
-	audio_block_t *block;
-	uint32_t h;
-
-	block = receiveReadOnly();
-	if (!block) return;
-	if (!enabled) {
-		release(block);
-		return;
-	}
-	h = head + 1;
-	if (h >= 53) h = 0;
-	if (h == tail) {
-		release(block);
-	} else {
-		queue[h] = block;
-		head = h;
-	}
-}
-
-
+#endif
